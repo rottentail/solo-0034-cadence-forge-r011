@@ -265,6 +265,30 @@
       "verification": "python3 scripts/workflow_check.py --workflow wav-render"
     },
     {
+      "id": "tempo-fit",
+      "name": "tempo-fit",
+      "entry": "GET /forge/v1/sheets/{id}/fit + POST /forge/v1/sheets/{id}/resolve",
+      "success": "画面与字幕共用一份已确认的源到成片变速关系",
+      "failure": "未确认的时长冲突拒绝预览与提交",
+      "steps": [
+        "入口解码与领域事实读取",
+        "片段内部按锁定对白分区求解节奏，字幕与画面引用同一计划",
+        "冲突时给出可审阅候选，确认后冻结进渲染与交付包",
+        "画面与字幕共用一份已确认的源到成片变速关系"
+      ],
+      "module_ids": [
+        "http",
+        "application",
+        "timeline",
+        "captions",
+        "encoding",
+        "inspection",
+        "domain",
+        "journal"
+      ],
+      "verification": "python3 scripts/workflow_check.py --workflow tempo-fit"
+    },
+    {
       "id": "idempotent-submit",
       "name": "idempotent-submit",
       "entry": "POST /forge/v1/renders + Idempotency-Key",
@@ -445,7 +469,7 @@
     "evidence": {
       "concurrency": "internal/service/worker.go:claim, completeLocked",
       "recovery_rollback": "internal/journal/recovery.go:Recover",
-      "time_semantics": "internal/timeline/plan.go:Build; internal/caption/map.go:Map",
+      "time_semantics": "internal/timeline/plan.go:Build; internal/timeline/fit.go:resolvePieces; internal/caption/map.go:Map",
       "idempotency": "internal/service/submit.go:Submit",
       "snapshot_consistency": "internal/service/submit.go:Submit; internal/journal/store.go:Update"
     }

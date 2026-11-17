@@ -21,6 +21,8 @@ func Handler(s *service.Service) http.Handler {
 	m.HandleFunc("POST /forge/v1/recipes", a.recipe)
 	m.HandleFunc("PUT /forge/v1/recipes/{id}", a.recipe)
 	m.HandleFunc("GET /forge/v1/sheets/{id}/preview", a.preview)
+	m.HandleFunc("GET /forge/v1/sheets/{id}/fit", a.fit)
+	m.HandleFunc("POST /forge/v1/sheets/{id}/resolve", a.resolve)
 	m.HandleFunc("POST /forge/v1/renders", a.submit)
 	m.HandleFunc("GET /forge/v1/renders/{id}", a.render)
 	m.HandleFunc("POST /forge/v1/renders/{id}/cancel", a.cancel)

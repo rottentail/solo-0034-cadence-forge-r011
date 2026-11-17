@@ -98,6 +98,35 @@ func (a API) preview(w http.ResponseWriter, r *http.Request) {
 	}
 	write(w, 200, v)
 }
+func (a API) fit(w http.ResponseWriter, r *http.Request) {
+	v, err := a.Service.Fit(r.PathValue("id"))
+	if err != nil {
+		failure(w, err)
+		return
+	}
+	write(w, 200, v)
+}
+func (a API) resolve(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Choice string `json:"choice"`
+	}
+	if err := decode(w, r, &input); err != nil {
+		failure(w, err)
+		return
+	}
+	rev, err := expected(r)
+	if err != nil {
+		failure(w, err)
+		return
+	}
+	v, err := a.Service.ResolveSheet(r.PathValue("id"), rev, input.Choice)
+	if err != nil {
+		failure(w, err)
+		return
+	}
+	w.Header().Set("ETag", strconv.Itoa(v.Revision))
+	write(w, 201, v)
+}
 func (a API) events(w http.ResponseWriter, r *http.Request) {
 	after := uint64(0)
 	if q := r.URL.Query().Get("after"); q != "" {

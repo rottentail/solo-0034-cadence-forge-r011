@@ -31,9 +31,19 @@ func Artifact(ctx context.Context, prober media.Prober, path string, r domain.Re
 		return domain.Inspection{}, err
 	}
 	delta := m.DurationMS - r.Plan.DurationMS
+	// Every tempo segment quantizes to whole frames (or atempo windows),
+	// so the honest duration bound scales with the confirmed map's
+	// segment count rather than a single flat constant.
+	segments := 0
+	for _, p := range r.Plan.Placements {
+		segments += len(p.Tempo())
+	}
 	tolerance := int64(100)
 	if r.Recipe.Format == "mp4" {
-		tolerance = max(tolerance, int64(2000/r.Recipe.FPS))
+		frame := int64(math.Ceil(1000 / float64(r.Recipe.FPS)))
+		tolerance = max(tolerance, int64(2000/r.Recipe.FPS)) + int64(segments)*frame
+	} else {
+		tolerance += int64(segments) * 25
 	}
 	if math.Abs(float64(delta)) > float64(tolerance) {
 		return domain.Inspection{}, fmt.Errorf("output duration delta %dms exceeds %dms", delta, tolerance)

@@ -52,10 +52,16 @@ func ValidateSheet(s Sheet, sources map[string]Source) error {
 		if math.IsNaN(p.GainDB) || math.IsInf(p.GainDB, 0) || p.GainDB < -60 || p.GainDB > 12 {
 			return Invalid("span %d has invalid gain", i)
 		}
+		if err := validateTempo(i, p); err != nil {
+			return err
+		}
 		duration += p.OutMS - p.InMS
 	}
 	if duration > 120000 {
 		return Invalid("sheet exceeds 120 seconds")
+	}
+	if err := validateDelivery(s); err != nil {
+		return err
 	}
 	if len(s.Cues) > 500 {
 		return Invalid("sheet exceeds 500 cues")
@@ -70,6 +76,52 @@ func ValidateSheet(s Sheet, sources map[string]Source) error {
 		}
 		if !utf8.ValidString(c.Text) || strings.TrimSpace(c.Text) == "" || len(c.Text) > 2000 || strings.Contains(c.Text, "-->") || strings.ContainsAny(c.Text, "\x00\r") {
 			return Invalid("cue %d has invalid text", i)
+		}
+	}
+	return nil
+}
+func validateTempo(span int, p Span) error {
+	if len(p.Tempo) == 0 {
+		return nil
+	}
+	if len(p.Tempo) > 64 {
+		return Invalid("span %d exceeds 64 tempo zones", span)
+	}
+	cursor := p.InMS
+	for i, z := range p.Tempo {
+		if z.InMS != cursor || z.OutMS <= z.InMS {
+			return Invalid("span %d tempo zones must exactly partition the span", span)
+		}
+		if math.IsNaN(z.Rate) || math.IsInf(z.Rate, 0) || z.Rate < 0.25 || z.Rate > 8 {
+			return Invalid("span %d tempo zone %d rate must be 0.25..8", span, i)
+		}
+		cursor = z.OutMS
+	}
+	if cursor != p.OutMS {
+		return Invalid("span %d tempo zones must exactly partition the span", span)
+	}
+	return nil
+}
+func validateDelivery(s Sheet) error {
+	if s.Delivery == nil {
+		return nil
+	}
+	d := s.Delivery
+	if d.TargetMS < 1000 || d.TargetMS > 120000 {
+		return Invalid("delivery target must be 1000..120000ms")
+	}
+	if d.MaxDialogueRate != 0 && (math.IsNaN(d.MaxDialogueRate) || math.IsInf(d.MaxDialogueRate, 0) || d.MaxDialogueRate < 0.5 || d.MaxDialogueRate > 4) {
+		return Invalid("max_dialogue_rate must be 0.5..4")
+	}
+	if d.MaxRate != 0 && (math.IsNaN(d.MaxRate) || math.IsInf(d.MaxRate, 0) || d.MaxRate < 1 || d.MaxRate > 8) {
+		return Invalid("max_rate must be 1..8")
+	}
+	if d.MaxDialogueRate != 0 && d.MaxRate != 0 && d.MaxDialogueRate > d.MaxRate {
+		return Invalid("max_dialogue_rate cannot exceed max_rate")
+	}
+	for i, p := range s.Spans {
+		if len(p.Tempo) > 0 {
+			return Invalid("span %d combines explicit tempo zones with a delivery target", i)
 		}
 	}
 	return nil

@@ -162,6 +162,67 @@ def main():
                 need(audio_done['state'] == 'succeeded', str(audio_done['attempts']))
                 need(audio_done['artifact']['inspection']['media']['audio_codec'] == 'pcm_s16le', 'audio codec mismatch')
                 observe('wav-render', 'trimmed stereo PCM WAV encoded with loudness filter')
+            if args.workflow in ('all', 'tempo-fit'):
+                fit_sheet = request('POST', '/sheets', dict(name='dialogue-fit', spans=[
+                    dict(source_id=sid, in_ms=0, out_ms=4000, gain_db=0)],
+                    cues=[dict(source_id=sid, start_ms=1000, end_ms=3000, text='关键对白', pace_lock=True)],
+                    delivery=dict(target_ms=2600, max_dialogue_rate=1.0, max_rate=4.0)), status=201)
+                report = request('GET', '/sheets/'+fit_sheet['id']+'/fit')
+                need(report['status'] == 'resolved' and report['strategy'] == 'fit', str(report))
+                fit_plan = request('GET', '/sheets/'+fit_sheet['id']+'/preview?recipe_id='+rp)
+                segs = fit_plan['placements'][0]['segments']
+                need(fit_plan['duration_ms'] == 2600 and len(segs) == 3, 'fit plan mismatch')
+                need(segs[1]['rate'] == 1.0 and segs[1]['output_in_ms'] == 300 and segs[1]['output_out_ms'] == 2300, 'dialogue not preserved')
+                need('00:00:00.300 --> 00:00:02.300' in fit_plan['vtt'], 'fit caption mapping mismatch')
+                fit_render = request('POST', '/renders', dict(sheet_id=fit_sheet['id'], sheet_revision=1, recipe_id=rp, recipe_revision=1), {'Idempotency-Key': 'tempo-fit'}, status=202)
+                fit_done = wait_render(fit_render['id'])
+                need(fit_done['state'] == 'succeeded', str(fit_done['attempts']))
+                need(abs(fit_done['artifact']['inspection']['media']['duration_ms'] - 2600) <= 100, 'fit artifact duration mismatch')
+                need(fit_done['plan']['tempo']['strategy'] == 'fit', 'frozen tempo strategy drifted')
+                conflict_sheet = request('POST', '/sheets', dict(name='dialogue-conflict', spans=[
+                    dict(source_id=sid, in_ms=0, out_ms=4000, gain_db=0)],
+                    cues=[dict(source_id=sid, start_ms=1000, end_ms=3000, text='关键对白', pace_lock=True)],
+                    delivery=dict(target_ms=1900, max_dialogue_rate=1.0, max_rate=4.0)), status=201)
+                cid = conflict_sheet['id']
+                pending = request('GET', '/sheets/'+cid+'/fit')
+                need(pending['status'] == 'confirmation_required', str(pending))
+                pace, deadline = pending['candidates']
+                need(pace['id'] == 'pace-first' and pace['duration_ms'] == 2500 and not pace['target_met'], str(pace))
+                need(deadline['id'] == 'deadline-first' and deadline['duration_ms'] == 1900 and deadline['target_met'], str(deadline))
+                request('GET', '/sheets/'+cid+'/preview?recipe_id='+rp, status=409)
+                request('POST', '/renders', dict(sheet_id=cid, sheet_revision=1, recipe_id=rp, recipe_revision=1), {'Idempotency-Key': 'unresolved'}, status=409)
+                request('POST', '/sheets/'+cid+'/resolve', {'choice': 'warp-speed'}, {'If-Match': '1'}, status=400)
+                resolved = request('POST', '/sheets/'+cid+'/resolve', {'choice': 'deadline-first'}, {'If-Match': '1'}, status=201)
+                need(resolved['revision'] == 2 and resolved['resolution'] == 'deadline-first', 'resolution not confirmed')
+                request('POST', '/sheets/'+cid+'/resolve', {'choice': 'pace-first'}, {'If-Match': '2'}, status=409)
+                solved_plan = request('GET', '/sheets/'+cid+'/preview?recipe_id='+rp)
+                need(solved_plan['duration_ms'] == 1900 and solved_plan['tempo']['strategy'] == 'deadline-first', 'resolved plan mismatch')
+                need('00:00:00.250 --> 00:00:01.650' in solved_plan['vtt'], 'resolved caption mapping mismatch')
+                solved_render = request('POST', '/renders', dict(sheet_id=cid, sheet_revision=2, recipe_id=rp, recipe_revision=1), {'Idempotency-Key': 'resolved'}, status=202)
+                solved_done = wait_render(solved_render['id'])
+                need(solved_done['state'] == 'succeeded', str(solved_done['attempts']))
+                need(abs(solved_done['artifact']['inspection']['media']['duration_ms'] - 1900) <= 100, 'resolved artifact duration mismatch')
+                packed = request('GET', '/renders/'+solved_done['id']+'/bundle', raw=True)
+                with zipfile.ZipFile(io.BytesIO(packed)) as z:
+                    frozen = json.loads(z.read('composition.json'))
+                    need(frozen['plan']['vtt'] == z.read('captions.vtt').decode(), 'tempo bundle captions drifted')
+                    need(frozen['sheet']['resolution'] == 'deadline-first' and frozen['plan']['tempo']['strategy'] == 'deadline-first', 'bundle lost confirmed choice')
+                    need(len(frozen['plan']['placements'][0]['segments']) == 3, 'bundle lost tempo map')
+                explicit_sheet = request('POST', '/sheets', dict(name='explicit-zones', spans=[
+                    dict(source_id=sid, in_ms=0, out_ms=2000, gain_db=0, tempo=[dict(in_ms=0, out_ms=2000, rate=2.0)]),
+                    dict(source_id=sid, in_ms=1000, out_ms=3000, gain_db=0, tempo=[dict(in_ms=1000, out_ms=2000, rate=0.5), dict(in_ms=2000, out_ms=3000, rate=1.0)])],
+                    cues=[dict(source_id=sid, start_ms=1500, end_ms=2500, text='重复源')]), status=201)
+                explicit_plan = request('GET', '/sheets/'+explicit_sheet['id']+'/preview?recipe_id='+rp)
+                need(explicit_plan['duration_ms'] == 4000 and explicit_plan['tempo']['strategy'] == 'explicit', 'explicit plan mismatch')
+                need('00:00:00.750 --> 00:00:01.000' in explicit_plan['vtt'], 'first occurrence mapping mismatch')
+                need('00:00:02.000 --> 00:00:03.500' in explicit_plan['vtt'], 'second occurrence mapping mismatch')
+                explicit_render = request('POST', '/renders', dict(sheet_id=explicit_sheet['id'], sheet_revision=1, recipe_id=rp, recipe_revision=1), {'Idempotency-Key': 'explicit'}, status=202)
+                explicit_done = wait_render(explicit_render['id'])
+                need(explicit_done['state'] == 'succeeded', str(explicit_done['attempts']))
+                need(abs(explicit_done['artifact']['inspection']['media']['duration_ms'] - 4000) <= 150, 'explicit artifact duration mismatch')
+                request('POST', '/sheets', dict(name='bad-mix', spans=[dict(source_id=sid, in_ms=0, out_ms=2000, gain_db=0, tempo=[dict(in_ms=0, out_ms=2000, rate=2.0)])], delivery=dict(target_ms=1500)), status=400)
+                request('POST', '/sheets', dict(name='bad-zones', spans=[dict(source_id=sid, in_ms=0, out_ms=2000, gain_db=0, tempo=[dict(in_ms=0, out_ms=1500, rate=2.0)])]), status=400)
+                observe('tempo-fit', 'dialogue pace preserved inside a fixed delivery; conflict produced reviewable candidates; confirmed choice drives picture, captions and bundle')
             request('DELETE', '/sources/'+sid, status=409)
             observe('retire-source', 'historical sheet reference prevents retirement')
             if args.workflow in ('all', 'cancel', 'retry', 'restart-recover'):
